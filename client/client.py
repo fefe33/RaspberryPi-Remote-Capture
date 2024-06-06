@@ -95,7 +95,7 @@ class TCPclient:
                 capture_file.write(i.to_bytes())
         #call the prompt button to display stdout/stderr and alert the user to the process having been completed
 
-        self.prompt(output.decode('utf-8'))
+        self.prompt(output)
 
 
 # get and validate the args
