@@ -1,5 +1,4 @@
 ## remote capture application
-<hr>
 <h1>what it does</h1>
 <p>allows for remote capture of a network on a remote device using TCPdump, then for download of the resulting pcap for further analysis on the client computer</p>
 <h1>requirements</h1>
