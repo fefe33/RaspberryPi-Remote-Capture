@@ -116,8 +116,6 @@ except:
 # if the first arg is *, make hostname empty string
 if args[0] == '*':
     args[0] = ''
-app = TCPserver(args[0], args[1])
-app.service()
 
 
 
