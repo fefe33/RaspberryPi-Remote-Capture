@@ -1,7 +1,7 @@
 ## remote capture application
 <hr>
 <h1>what it does</h1>
-<p>allows for basic remote pcap capture and download directly over TCP. </p>
+<p>allows for remote capture of a network on a remote device using TCPdump, then for download of the resulting pcap for further analysis on the client computer</p>
 <h1>requirements</h1>
 <ul>
   <li>TCPdump (serverside)</li>
@@ -15,4 +15,3 @@
   <li>go over to your client PC and clone the repo there too (if you havent already).</li>
   <li>from there, cd into the server directory and run <code>python3 client.py [host] [port] [limit] </code> where [host] and [port] are that of the server, and [limit] is the number of packets you wish to capture </li>
 </ol>
-<h1></h1>
