@@ -118,6 +118,8 @@ if args[0] == '*':
     args[0] = ''
 
 
-
-client_app = TCPclient(sys.argv[1], int())
+try:
+    client_app = TCPclient(sys.argv[1], int(sys.argv[2]), int(sys.argv[3]))
+except:
+    print('failed to execute, use <host> <port> <num of packets>')
 client_app.run()
