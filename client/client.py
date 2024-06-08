@@ -1,5 +1,5 @@
-import socket, tkinter, json, os, sys
-from tkinter import ttk
+import socket, tkinter, json, os, sys, struct, argparse
+from tkinter import scrolledtext
 #this is the client for the IOT application
 '''
     the goal of this program is to
@@ -16,40 +16,73 @@ from tkinter import ttk
 
 class TCPclient:
     #subclass the tkinter frame class (for window management functions)
-    class App(tkinter.Frame):
-        def __init__(self, master=None):
-            super().__init__(master)
-            self.pack()
 
     def __init__(self, HOST, PORT):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.address = (HOST, PORT)
-        self.root = self.App()
+        self.window = tkinter.Tk()
         self.downloads_path = os.path.dirname(os.path.realpath(__name__))+'/captures'
+        self.cmds = ['capture', 'scan']
 
-    def prompt(self, t):
-        #this is for the final popup
-        # here are method calls to the window manager class
-        #
-        self.root.master.title("remote capture client")
-        self.root.master.maxsize(1000, 400)
-        self.root.master.minsize(500, 140)
-        frm = ttk.Frame(self.root, padding=10)
-        frm.grid()
-        ttk.Label(frm, text=t).grid(column=0, row=0)
-        ttk.Label(frm, text='process complete.', padding=40).grid(column=0, row=1)
-        self.root.mainloop()
+    def prompt(self, out, err, path):
+        # create main window
+        self.window.title('remote capture manager')
+        self.window.geometry('980x450')
+        # write the scrollbox titles
+        TB_labelA = tkinter.Label(self.window, text='output:')
+        TB_labelB = tkinter.Label(self.window, text='errors:')
+        TB_labelA.grid(column=0, row=0, sticky='nsew')
+        TB_labelB.grid(column=1, row=0, sticky='nsew')
+        # create the scroll boxes, and make them sticky in all directions. make each in its own column on the same row
+        text_area1 = scrolledtext.ScrolledText(self.window, wrap=tkinter.WORD)
+        text_area1.grid(column=0, row=1, sticky='nsew')
+        text_area2 = scrolledtext.ScrolledText(self.window, wrap=tkinter.WORD)
+        text_area2.grid(column=1, row=1, sticky="nsew")
+        #add the footer label with the path to the download
+        footer = tkinter.Label(self.window, text='success. pcap downloaded to {}'.format(path.replace('/', '\\')))
+        footer.grid(column=0, columnspan=2, row=2, sticky="ew")
+        # configure the rows and columns for all 3 indexes
+        for i in range(3):
+            self.window.grid_rowconfigure(i, weight=1)
+            self.window.grid_columnconfigure(i, weight=1)
 
-    def run(self, limit):
+        text_area1.insert(tkinter.INSERT, out)
+        text_area2.insert(tkinter.INSERT, err)
+        self.window.mainloop()
+
+    '''
+        'cmd' values:
+            'capture' -- for remote capture
+            'scan' -- to initiate remote scan
+    '''
+
+    def run(self, cmd, options):
         print('attempting to connect on {}'.format(self.address))
         self.sock.connect(self.address)
-        #send the request body:
-        #this is the request for a capture
-        capture = {
-            'cmd':'capture',
-            'limit': limit
+        #create the request and validate that the comand is valid and  is a valid one
+        action = {
+            'cmd': cmd
         }
-        self.sock.sendall(json.dumps(capture).encode('utf-8'))
+
+
+        #this is the request for a capture
+        if cmd == 'capture':
+            #all options are required (for simplicities sake)
+            req = ['limit', 'verbose']
+            #check for required options
+            #construct the request:
+            action['limit'] = options['limit']
+            action['verbose'] = options['verbose']
+
+
+
+
+
+
+
+
+
+        self.sock.sendall(json.dumps(action).encode('utf-8'))
         #close the connection
         self.sock.close()
         #wait for the incoming data and append it to buffer b
@@ -83,9 +116,13 @@ class TCPclient:
 
         print('file recieved. parsing output')
         #parse the output
-        header_length = int(b[0].to_bytes())
-        file_content = b[header_length+1:]
-        output =  b[1:header_length+1].decode('utf-8')
+        output_length = struct.unpack('>Q', b[0:8])[0]
+        #remove the length header
+        b = b[8:]
+        print('length: ',output_length)
+        #add 1 to output length for index
+        file_content = b[output_length:]
+        output =  b[:output_length].decode('utf-8')
 
         print('file_content: ', file_content)
 
@@ -94,33 +131,68 @@ class TCPclient:
             for i in file_content:
                 capture_file.write(i.to_bytes())
         #call the prompt button to display stdout/stderr and alert the user to the process having been completed
+        print('pre-deserialized output: ', output)
+        output = json.loads(output) #this will determine whether the buffer is being read/calculated correctly
 
-        self.prompt(output)
+        self.prompt(output['put'], output['err'], filepath)
 
+#parse the args
+p = argparse.ArgumentParser(
+    prog='client.py',
+    description='use this program to connect to the IOT capture server'
+)
+p.add_argument('--addr', type=str, nargs=1, help='specifies the host and port you wish to connect to [host:port]', required=True)
+p.add_argument('-c', '--cmd', type=str, nargs=1, help='the command you wish to run [\'capture\' or \'scan\'])')
+p.add_argument('-l', '--limit', type=int, nargs=1, help='this specefies how many packets you wish to capture [if performing a capture]')
+p.add_argument('-v', '--verbose', type=int, nargs=1, help='specifies verbosity level.\n\t0=none\n\t1=verbose (text only)\n\t2=verbose (hex/ascii) --> [may run into buffer errors] if size is too large for transport')
 
-# get and validate the args
-args = sys.argv[1:]
-if len(args) != 3:
-    print('incorrect number of arguments. use <server> <port> <limit (for number of packets)>')
-    exit(-1)
-try:
-    # convert the port to integer.
-    args[1] = int(args[1])
-except:
-    print('port must be of type integer.')
-    exit(-1)
-
-#validate the
-
-
-# if the first arg is *, make hostname empty string
-if args[0] == '*':
-    args[0] = ''
-
+args = p.parse_args()
 
 try:
-    client_app = TCPclient(sys.argv[1], int(sys.argv[2]))
+    address = args.addr[0].split(':')
+    address[1] = int(address[1])
 except:
-    print('failed to execute, use <host> <port> <num of packets>')
+    print('port must be of type int. see -h for help')
     exit(-1)
-client_app.run(int(sys.argv[3]))
+client_app = TCPclient(address[0], address[1])
+
+#handle the other arguments
+#first the command
+cmd = args.cmd[0]
+valid_commands = ['capture', 'scan']
+try:
+    assert cmd in valid_commands
+except:
+    print('{} is not a valid command'.format(cmd))
+    exit(-1)
+
+
+#next handle the conditionals:
+if cmd == valid_commands[0]: # if its a capture ----------
+    #check for invalid arguments [of which there are currently none]
+    #check the request mode and convert to string
+
+    #try to construct the object:
+    try:
+        verbose = args.verbose[0]
+        print(verbose)
+        if verbose == 0:
+            v = 'NONE'
+        elif verbose == 1:
+            v = 'TEXT'
+        elif verbose == 2:
+            v = 'HEX'
+        o = {
+            'limit':args.limit,
+            'verbose':v
+        }
+    except:
+        print('missing required argument.\nrequired args for captures are --limit (or -l) and --verbose (or -v). see -h for help')
+        exit(-1)
+
+client_app.run(cmd, o) #takes 2 options, str(command) and dict(options)
+
+
+
+
+
