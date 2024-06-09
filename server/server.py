@@ -32,9 +32,10 @@ import socket, os, json, subprocess, sys, struct, argparse
 
 
 class TCPserver:
-    def __init__(self, HOST:str, PORT:int, debug:bool):
+    def __init__(self, HOST:str, PORT:int, debug:bool, interface: str):
         self.port = PORT
         self.host = HOST
+        self.interface = interface
         self.debug = debug
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         #bind to the socket
@@ -93,7 +94,80 @@ class TCPserver:
             temp_sock.connect((addr[0], self.port+1))
             temp_sock.sendall(r)
             temp_sock.close()
-            return True
+        elif request['cmd'] == 'scan':
+            #this is the nmap scan.
+            #these are the scan mappings. values are 2 arrs (for quick injection of other flags)
+            scan_mappings = {
+                    'OS':[['sudo', 'nmap'], ['-O']],
+                    'service':[['nmap'], ['-sV']],
+                    'discover':[['nmap'],['-sn']],
+                    'IP':[['sudo', 'nmap'], ['-sO']],
+                    'TCP':[['nmap'], ['-sT']],
+                    'UDP':[['sudo', 'nmap'], ['-sU']],
+                    'stealth':[['sudo', 'nmap'], ['-sS']]
+            }
+            
+            #lambda function to validate values
+            validate = lambda t: (' ' not in t) and (';' not in t)
+            #get the values from the required keys
+            target = request['target']  
+            method = request['method']
+            #try to validate each value that needs validateion, closing connection on exception
+            try:
+                #next try to get the value for the ports [if its present] and add to list of values to validate, if not, carry on
+                to_validate = [target]
+                try:
+                    ports = request['ports']
+                    to_validate.append(ports)
+                except:
+                    pass
+                #now validate
+                for i in to_validate:
+                    assert validate(i)
+                assert method in list(scan_mappings.keys())
+            except:
+                print('bad request. closing connection.')
+                client_sock.close()
+                return False
+            
+            #assemble the command
+            cmd = scan_mappings[method]
+            #if the scan method is discover. dont bother adding the port specs
+            if method == 'discover':
+                cmd = cmd[0] + [target] + cmd[1]
+            else:
+                cmd = cmd[0]+[target, '-p', ports]+cmd[1]
+
+            #check for spoof
+            if 'spf' in list(request.keys()):
+                if request['spf'] == 'mac':
+                    cmd = cmd + ['--spoof-mac', '0']
+                elif request['spf'] == 'IP':
+                    cmd = cmd + ['-S', '0', '-e', self.interface]
+                elif request['spf'] == 'all':
+                    cmd = cmd + ['-S', 0, '-e', self.inteface, '-S', '0']
+            #run the command
+            print('running command: ', cmd)
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            #wait for the process to complete
+            proc.wait()
+            #get the data
+            out, err = proc.communicate()
+            #create the temporary socket
+            temp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            addr = (addr[0], self.port+1)
+            print('returning data')
+            if self.debug==True:
+                print('establishing connection to client @ {}'.format(addr))
+            temp_sock.connect(addr)
+            raw_output = json.dumps({'put': out.decode('utf-8'),'err':err.decode('utf-8')}).encode('utf-8')
+            if self.debug==True:
+                print('connection successful. response payload: ', raw_output)
+            temp_sock.sendall(raw_output)
+            temp_sock.close()
+
+    
+        return True
                 
     
 
@@ -128,7 +202,8 @@ class TCPserver:
                 print('raw data recieved: ', data)
                 #if its the kill signal
                 if data == '!KILL':
-                    sock.close()
+                    csock.close()
+                    self.sock.close()
                     self.running = False
                     break
                 else:
@@ -139,8 +214,7 @@ class TCPserver:
                     print('handler success: ', self.requestHandler(data, csock, addr))
         
         #break the connection and exit the program
-        print('why did you kill me.\nprocess completed. exiting')
-        sock.close()
+        print('\n\t -- WHY DID YOU KILL ME?! --\n\nprocess terminated.')
         exit(0)
 
 
@@ -149,6 +223,7 @@ class TCPserver:
 p = argparse.ArgumentParser()
 p.add_argument('--addr', type=str, nargs=1, help='specifies the host and port the server should listen on [host:port]', required=True)
 p.add_argument('-d','--debug', type=str, help='prints payload length and payload for use in debugging (use \'on\'/\'off\'')
+p.add_argument('-si', '--interface', type=str, nargs=1, help='define the scan interface (default=wlan0 [may be different on your device])')
 #parse them
 args = p.parse_args()
 
@@ -175,8 +250,18 @@ except:
 #if the first arg is *, make hostname empty string
 if address[0] in ['*', '', ' ']:
 	address[0] = ''
-app = TCPserver(address[0], address[1], debug)
+
+#try to get the interface. default to wlan0
+try:
+    iface = args.interface
+    print('scan interface: ', args.interface)
+except:
+    print('defaulting to scan interface \'wlan0\' for interface (none specified)')
+    iface = 'wlan0'
+
+app = TCPserver(address[0], address[1], debug, iface)
 app.service()
 
 
 
+	
