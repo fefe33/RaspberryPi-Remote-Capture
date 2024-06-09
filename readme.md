@@ -1,5 +1,4 @@
 ## remote capture application
-<h6>written with love in pure python :D</h6>
 <h1>what it does</h1>
 <p>allows to perform packet capture and download of pcap over the network from a remote device using TCPdump as well as perform some general Nmap scans</p>
 <h1>requirements</h1>
