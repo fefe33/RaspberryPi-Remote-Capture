@@ -25,6 +25,8 @@ class TCPclient:
         self.cmds = ['capture', 'scan']
         #the mode is defined in the .run() method
         self.mode = None
+        #boolean to signal whether or not its necessary to perform a download
+        self.download = False
 
     def prompt(self, out, err, footer_text):
         # create main window
@@ -41,7 +43,7 @@ class TCPclient:
         text_area2 = scrolledtext.ScrolledText(self.window, wrap=tkinter.WORD)
         text_area2.grid(column=1, row=1, sticky="nsew")
         #add the footer label with the path to the download
-        if self.mode=='capture':
+        if self.mode=='capture' and self.download == True:
             footer = tkinter.Label(self.window, text='success. pcap downloaded to {}'.format(footer_text.replace('/', '\\')))
         else:
             footer = tkinter.Label(self.window, text=footer_text)
@@ -65,7 +67,11 @@ class TCPclient:
         #set the mode to the command
         self.mode = cmd
         print('attempting to connect on {}'.format(self.address))
-        self.sock.connect(self.address)
+        try:
+            self.sock.connect(self.address)
+        except:
+            print('oops. looks like you connected to the wrong port or your server isnt running.\nfailed to connect.')
+            exit(0)
         #create the request and validate that the comand is valid and  is a valid one
         action = {
             'cmd': cmd
@@ -74,12 +80,19 @@ class TCPclient:
 
         #this is the request for a capture
         if cmd == 'capture':
+            # try to get the 'download' key from the options object
+
+            print(options['download'])
+            self.download = options['download']
+
+
             #all options are required (for simplicities sake)
             req = ['limit', 'verbose']
             #check for required options
             #construct the request:
             action['limit'] = options['limit']
             action['verbose'] = options['verbose']
+            action['download'] = options['download']
             self.sock.sendall(json.dumps(action).encode('utf-8'))
         if cmd == 'kill':
             #send the !KILL command directly via TCP, close the connection, and exit the program
@@ -111,7 +124,7 @@ class TCPclient:
             exit(-1)
         if self.mode == 'capture':
             print('downloading file (this may take a while)')
-        elif self.mode == 'scan':
+        elif self.mode == 'scan' or self.download==False:
             print('downloading results...')
         # wait for the incoming data and append it to buffer b
         b = b''
@@ -120,29 +133,35 @@ class TCPclient:
             if not d or d == b'':
                 break
             b += d
-        #when the ouput is recieved, handle it according to self.mode
+        #when the ouput is recieved, handle it according to self.mode and self.download
         if self.mode == 'capture':
             print('file recieved. parsing output')
-            output_length = struct.unpack('>Q', b[0:8])[0]
-            # remove the length header
-            b = b[8:]
-            print('length: ', output_length)
-            # add 1 to output length for index
-            file_content = b[output_length:]
-            output = b[:output_length].decode('utf-8')
+            #serialized content returned directly over TCP
+            if self.download ==True:
+                output_length = struct.unpack('>Q', b[0:8])[0]
+                # remove the length header
+                b = b[8:]
+                print('length: ', output_length)
+                # add 1 to output length for index
+                file_content = b[output_length:]
+                output = b[:output_length].decode('utf-8')
 
-            print('file_content: ', file_content)
+                print('file_content: ', file_content)
 
-            filepath = self.downloads_path + '/remote{}.pcap'.format(str(len(os.listdir(self.downloads_path))))
-            with open(filepath, 'wb') as capture_file:
-                for i in file_content:
-                    capture_file.write(i.to_bytes())
-            # call the prompt button to display stdout/stderr and alert the user to the process having been completed
-            print('pre-deserialized output: ', output)
-            output = json.loads(output)  # this will determine whether the buffer is being read/calculated correctly
+                filepath = self.downloads_path + '/remote{}.pcap'.format(str(len(os.listdir(self.downloads_path))))
+                with open(filepath, 'wb') as capture_file:
+                    for i in file_content:
+                        capture_file.write(i.to_bytes())
+                # call the prompt button to display stdout/stderr and alert the user to the process having been completed
+                print('pre-deserialized output: ', output)
+                output = json.loads(output)  # this will determine whether the buffer is being read/calculated correctly
 
-            self.prompt(output['put'], output['err'], filepath)
-
+                self.prompt(output['put'], output['err'], filepath)
+            elif self.download == False:
+                #if its false, deserialize the output as JSON
+                output = json.loads(b.decode('utf-8'))
+                self.prompt(output['put'], output['err'], 'success. process complete.')
+                
         elif self.mode == 'scan':
             print('download complete. output recieved. parsing output.') #data should be returned as JSON
             #deserialize the data directly as JSON after decode. there should be no file to download
@@ -163,6 +182,7 @@ p.add_argument('-c', '--cmd', type=str, nargs=1, help='the command you wish to r
 #capture args (all are conditional requirements)
 p.add_argument('-l', '--limit', type=int, nargs=1, help='this specefies how many packets you wish to capture (if performing a capture)')
 p.add_argument('-v', '--verbose', type=int, nargs=1, help='specifies verbosity level (if performing a capture). 0=none, 1=verbose (text only), 2=verbose (hex/ascii) --> [may run into buffer errors] if output size is too large for transport')
+p.add_argument('-d', '--download', type=str, nargs=1, help='specifies whether or not to download the capture as a PCAP file for analysis on this host')
 ####scan args
 #conditional requirements
 p.add_argument('-t','--target', type=str, nargs=1, help='specifies the target(s) (when performing a scan).')
@@ -170,9 +190,12 @@ p.add_argument('-p', '--port', type=str, nargs=1, help='specifies port or port r
 p.add_argument('-m', '--method', type=str, nargs=1, help='specifies the scan technique to be employed (when performing a scan). valid methods include: [\'OS\',\'service\',\'UDP\',\'TCP\' (full connect), \'SYN\' (TCP stealth),\'IP\']')
 #these args are not required for a scan
 p.add_argument('-s','--spoof', type=str, nargs=1, help='spoofs the macaddress, IP address, or both of the server to a random value (when performing a scan). valid options include [ \'mac\',\'ip\',\'all\']' )
-
+p.add_argument('-ao','--all-online', type=str, nargs=1, help='treats all hosts as online(when performing a scan), equivalent to nmap -Pn. default for OS scans (to prevent ping-discovery relate hangups). use \'on\'/\'off\'')
 args = p.parse_args()
 
+#yes this is functional instead of object oriented --> who doesnt love inconsistency? :D
+
+#try too get the host and port
 try:
     address = args.addr[0].split(':')
     address[1] = int(address[1])
@@ -192,7 +215,7 @@ except:
     exit(-1)
 
 
-#next handle the conditionals:
+#next handle the conditional requirements:
 if cmd == valid_commands[0]: # if its a capture ----------
     #check for invalid arguments [of which there are currently none]
     #check the request mode and convert to string
@@ -214,6 +237,18 @@ if cmd == valid_commands[0]: # if its a capture ----------
     except:
         print('missing required argument.\nrequired args for captures are --limit (or -l) and --verbose (or -v). see -h for help')
         exit(-1)
+
+    # handle the capture download flag
+    try:
+        print('download: ', args.download[0])
+        download = args.download[0]
+        if download == 'on':
+            o['download'] = True
+        if download == 'off':
+            o['download'] = False
+    except:
+        print('failed to parse download arg. setting to default (\'off\')')
+        o['download'] = False
 elif cmd == 'kill':
     o = {
         'cmd':'!KILL'
@@ -236,7 +271,7 @@ elif cmd == 'scan':
         #if no port is specified and the method is 'discover', pass
         assert validate(port)
     except:
-        if args.method[0] != 'discover' and not args.port:
+        if args.method[0] not in ('discover', 'OS', 'IP') and not args.port:
             print('not a valid port/port range or none specified (-p || --port)')
             exit(-1)
         else:
@@ -253,7 +288,7 @@ elif cmd == 'scan':
 
     #address incompatible options
     incompatible = lambda text,description:'incompatible options: {}, {}\n'.format(text,description)
-    if method == 'discover' and args.port != None:
+    if method in ('discover', 'OS', 'IP') and args.port != None:
         print(incompatible(['--port or -p', '--method or -m'],'cannot specify port when not performing port scan'))
         exit(-1)
 
@@ -265,23 +300,35 @@ elif cmd == 'scan':
         'target': target,
         'method': method,
     }
+    #try to get the ports
     try:
         o['ports'] = args.port[0]
     except:
         pass
+
     #try to add the additional flags to the object
+    #spoof
     try:
         spoof = args.spoof
         print('spoof: ', spoof)
         assert spoof in ['mac', 'ip', 'all']
         o['spf'] = spoof
+
     except:
         print('no valid spoof selected. default=none')
         pass
+    #all-online
+    # try to get the all-online option
+    if args.all_online and args.all_online[0].lower() == 'on' or method == 'OS':
+        all_online = True
+    else:
+        #if the var exists and doesnt equal off
+        if args.all_online and args.all_online[0]!='off':
+            print('invalid choice: -ao {}, defaulting to --all-online=off'.format(args.all_online[0]) )
+        all_online = False
 
+
+    o['all-online'] = all_online
 client_app.run(cmd, o) #takes 2 options, str(command) and dict(options)
-
-
-
 
 
